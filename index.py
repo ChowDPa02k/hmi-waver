@@ -16,9 +16,12 @@ window = [
     [],
     []
 ]
+peak_record = [0, 0]
 peak_position = np.linspace(72, 742, 68).astype('int')
 peak_position = np.append(peak_position, 742)
 freq_seperate = [1,  3,  7, 14, 29,  58, 117, 233, 466, 931, 1857]
+amp_scale = 100 / (np.log10(1000) - np.log10(0.025))
+np.set_printoptions(linewidth=400)
 # commands = []
 
 def arrayRMS(window):
@@ -72,6 +75,7 @@ def sampler(in_data, volume, queue):
         window = [[],[]]
 
 def command_generator_level(volume, window, queue):
+    global peak_record
     commands = []
     vol_scale = 100. / float(volume)
     # print(window)
@@ -86,33 +90,37 @@ def command_generator_level(volume, window, queue):
     rms_l_pct = int(rms_l * vol_scale * 100)
     rms_r_pct = int(rms_r * vol_scale * 100)
     # RMS to level
-    commands.append('ll.val=%i' % (rms_l_pct if rms_l_pct < 100 else 100))
-    commands.append('lr.val=%i' % (rms_r_pct if rms_r_pct < 100 else 100))
+    commands.append('b[1].val=%i' % (rms_l_pct if rms_l_pct < 100 else 100))
+    commands.append('b[2].val=%i' % (rms_r_pct if rms_r_pct < 100 else 100))
     # peak point
-    peak_l = 68 if (int(arrayPEAK(buffer_l) * 68) >= 68) else int(arrayPEAK(buffer_l) * 68)
-    peak_r = 68 if (int(arrayPEAK(buffer_r) * 68) >= 68) else int(arrayPEAK(buffer_r) * 68)
-    commands.append('pl.x=%i' % peak_position[peak_l])
-    commands.append('pr.x=%i' % peak_position[peak_r])
+    peak_l = 68 if (int(arrayPEAK(buffer_l) * 68 * vol_scale) >= 68) else int(arrayPEAK(buffer_l) * 68 * vol_scale)
+    peak_r = 68 if (int(arrayPEAK(buffer_r) * 68 * vol_scale) >= 68) else int(arrayPEAK(buffer_r) * 68 * vol_scale)
+    commands.append('b[3].x=%i' % peak_position[peak_l])
+    commands.append('b[4].x=%i' % peak_position[peak_r])
     # peak sign
     if rms_l_pct >= 99:
-        commands.append('vis pwl,1')
+        if peak_record[0] == 0:
+            commands.append('vis 5,1')
+        peak_record[0] = 1
     else:
-        commands.append('vis pwl,0')
+        if peak_record[0] == 1:
+            commands.append('vis 5,0')
+        peak_record[0] = 0
     if rms_r_pct >= 99:
-        commands.append('vis pwr,1')
+        if peak_record[1] == 0:
+            commands.append('vis 6,1')
+        peak_record[1] = 1
     else:
-        commands.append('vis pwr,0')
-    # spectrum
-    # spec = n p.fft.rfft(buffer_l)
-    # commands.append('ref star')
-    # print('\rVOL\t', '|' * int(np.mean([rms_l, rms_r]) * 40), ' ' * int(40 - 40 * np.mean([rms_l, rms_r])), end='')
-    # print(commands)
+        if peak_record[1] == 1:
+            commands.append('vis 6,0')
+        peak_record[1] = 0
+
     queue.put(commands)
     return commands
 
 def command_generator_spectrum(window, queue):
-    global freq_seperate
-    # dynamic_max = 2000
+    global freq_seperate, amp_scale
+
     commands = []
     left = np.hstack(window[0])
     right = np.hstack(window[1])
@@ -123,25 +131,27 @@ def command_generator_spectrum(window, queue):
     right_spectrum_seperated = []
 
     for i in range(10):
-        rms_fl = np.log10(1 + arrayRMS(left_spectrum[freq_seperate[i] : freq_seperate[i+1]]))
-        rms_fr = np.log10(1 + arrayRMS(right_spectrum[freq_seperate[i] : freq_seperate[i+1]]))
+        rms_fl = np.log10(arrayRMS(left_spectrum[freq_seperate[i] : freq_seperate[i+1]]))
+        rms_fr = np.log10(arrayRMS(right_spectrum[freq_seperate[i] : freq_seperate[i+1]]))
         left_spectrum_seperated.append(rms_fl)
         right_spectrum_seperated.append(rms_fr)
     left_spectrum_seperated = np.array(left_spectrum_seperated)
     right_spectrum_seperated = np.array(right_spectrum_seperated)
 
-    # print(np.max(left_spectrum_seperated - 1), np.max(right_spectrum_seperated - 1))
+    # print(np.min(left_spectrum_seperated), np.max(left_spectrum_seperated), '\n', np.min(right_spectrum_seperated), np.max(right_spectrum_seperated), '\n')
+    # print(np.max(left_spectrum_seperated), np.max(right_spectrum_seperated))
 
-    left_val = left_spectrum_seperated * 100 / 3
-    right_val = right_spectrum_seperated * 100 / 3
+    left_val = (left_spectrum_seperated + 1) * amp_scale
+    right_val = (right_spectrum_seperated  + 1) * amp_scale
     left_val[left_val>100] = 100
     right_val[right_val>100] = 100
     left_val[left_val<0] = 0
     right_val[right_val<0] = 0
+    # print(left_val, '\n', right_val)
 
     for i in range(10):
-        commands.append('j%i.val=%i' % (9-i, left_val[i]))
-        commands.append('j%i.val=%i' % (i+10, right_val[i]))
+        commands.append('b[%i].val=%i' % (16-i, left_val[i]))
+        commands.append('b[%i].val=%i' % (i+17, right_val[i]))
     # commands.append('ref star')
     queue.put(commands)
     # debug
@@ -158,14 +168,19 @@ def serial_sender(port, queue):
     print('Serial', device.name, 'opened\n')
 
     def send(device, content):
-        cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
-        cmd = bytes.fromhex(cmd+'ff ff ff')
-        device.write(cmd)
+        # cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
+        # cmd = bytes.fromhex(cmd+'ff ff ff')
+
+        device.write(bytes(content, encoding='utf-8') + b'\xff\xff\xff')
     
+    send(device, 'baud=256000')
+    device.close()
+    device = serial.Serial(port, 256000, timeout=1)  
     # send(device, 'page 1')
     while True:
         if not queue.empty():
             commands = queue.get()
+            print(commands)
             for item in commands:
                 try:
                     send(device, item)
@@ -176,7 +191,7 @@ def serial_sender(port, queue):
 
 if __name__ == '__main__':
 
-    SYSVOL = 50
+    SYSVOL = 15
     FORMAT = pyaudio.paInt16
     CHANNELS = 2
     RATE = 44100

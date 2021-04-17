@@ -1,7 +1,6 @@
 import numpy as np
 import scipy
 import requests
-import hmi
 from queue import PriorityQueue
 import multiprocessing
 from multiprocessing import Queue
