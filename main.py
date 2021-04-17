@@ -7,6 +7,8 @@ import multiprocessing
 from multiprocessing import Queue
 from time import sleep
 import binascii
+import time
+from scipy.io import wavfile
 # CHANNEL L
 #           X 50 Y 16 W 414 H 98
 #         R
@@ -26,7 +28,7 @@ import binascii
 
 SERIAL = 'COM3'
 
-WINDOW_SIZE = 128
+WINDOW_SIZE = 4096
 
 PEAK_POSITION = np.linspace(50, 442, 50).astype('int')
 LEVEL_WIDTH = (np.arange(0, 400, 8) - 350).astype('int')
@@ -59,35 +61,52 @@ def generateWaveSerialCommand(data):
     return cmds
 
 def generateWaveLevelCommand(data):
+    global last_peak
     cmds = []
-
+    # cmds.append('fill %i,234,4,32,6339' % last_peak[0])
+    # cmds.append('fill %i,272,4,32,6339' % last_peak[1])
+    # cmds.append('ref stop')
     windowLinearRMSL = calculateRMS(np.array(data[0]))
     windowLinearRMSR = calculateRMS(np.array(data[1]))
     windowPeakL = calculatePEAK(np.array(data[0]))
     windowPeakR = calculatePEAK(np.array(data[1]))
     
-    rmsL = int(50 * windowLinearRMSL)
-    rmsR = int(50 * windowLinearRMSR)
+    rmsL = int(100 * windowLinearRMSL)
+    rmsR = int(100 * windowLinearRMSR)
 
     peakL = 49 if int(50 * windowPeakL) == 50 else int(50 * windowPeakL)
     peakR = 49 if int(50 * windowPeakR) == 50 else int(50 * windowPeakR)
 
-    if rmsL == 50:
+    if rmsL == 100:
         cmds.append(PEAK_WARN_L)
-        rmsL = 49
     else:
         cmds.append(PEAK_DWARN_L)
 
-    if rmsR == 50:
+    if rmsR == 100:
         cmds.append(PEAK_WARN_R)
-        rmsR = 49
     else:
         cmds.append(PEAK_DWARN_R)
 
-    cmds.append('ll.x=%i' % LEVEL_WIDTH[rmsL])
-    cmds.append('lr.x=%i' % LEVEL_WIDTH[rmsR])
+    cmds.append('ll.val=%i' % rmsL)
+    cmds.append('lr.val=%i' % rmsR)
+    last_peak = [PEAK_POSITION[peakL], PEAK_POSITION[peakR]]
+    # cmds.append('ref star')
     # cmds.append('pl.x=%i' % PEAK_POSITION[peakL])
     # cmds.append('pr.x=%i' % PEAK_POSITION[peakR])
+    return cmds
+
+def generateWaveLevelRefPeakCommand():
+    global last_peak
+    cmds = []
+    cmds.append('fill %i,234,4,32,6339' % last_peak[0])
+    cmds.append('fill %i,272,4,32,6339' % last_peak[1])
+    return cmds
+
+def generateWaveLevelPeakCommand():
+    global last_peak
+    cmds = []
+    cmds.append('fill %i,234,4,32,65481' % last_peak[0])
+    cmds.append('fill %i,272,4,32,65481' % last_peak[1])
     return cmds
 
 def normal(data):
@@ -107,10 +126,11 @@ def queueHandler(queue, device):
             try:
                 msg = queue.get()
                 send(device, msg)
-                print(msg)
+                # print(msg)
             except Exception as exc:
                 print(exc)
                 # break
+            # sleep(0.001)
 
 def sendSerialCommandList(commands):
     for item in commands:
@@ -120,27 +140,33 @@ def sendSerialCommandList(commands):
 # def sendSerialCommand(priority, command):
 #     q.put(priority, command)
 def waveHandler(audio):
-    global window
+    global window, tick
     window[0].append(float(audio[0]))
     window[1].append(float(audio[1]))
-    levelWave = generateWaveSerialCommand(audio)
+    # levelWave = generateWaveSerialCommand(audio)
     # print(window)
-    sendSerialCommandList(levelWave)
+    # sendSerialCommandList(levelWave)
     # print(len(window[0]))
     if len(window[0]) == WINDOW_SIZE:
         levelCmds = generateWaveLevelCommand(window)
-        print(levelCmds)
-        result = sendSerialCommandList(levelCmds)
+        # print(levelCmds)
+        # sendSerialCommandList(generateWaveLevelRefPeakCommand())
+        sendSerialCommandList(levelCmds)
+        # sendSerialCommandList(generateWaveLevelPeakCommand())
         window = [[],[]]
+
+        tock = time.time()
+        print(1 / (tock - tick))
+        tick = tock
 
 
 if __name__ == '__main__':
     device = 'COM3'
     q = Queue(maxsize=0)
 
-    # simulate sinwave
-    t = np.linspace(0, 2, 1000)
-    x = 2 * np.pi * t
+    # # simulate sinwave
+    # t = np.linspace(0, 2, 1000)
+    # x = 2 * np.pi * t
 
     # signal = [
     #     normal(np.sin(x) * np.sin(3 * x)),
@@ -151,12 +177,11 @@ if __name__ == '__main__':
 
     handler = multiprocessing.Process(target=queueHandler, args=(q, device))
     handler.start()
-
+    tick = time.time()
+    last_peak = [432, 432]
     # hmi.send(device, 'page 3')
-
-    while True:
-        for i in x:
-            sample = [0.5 * (np.sin(i) * np.sin(3 * i)) + 0.5, 0.5 * (np.cos(i) * np.cos(3 * i)) + 0.5]
-            waveHandler(sample)
-            # print(sample)
-            sleep(0.01)
+    samplerate, data = wavfile.read('test.wav')
+    # while True:
+    for i in data:
+        sample = [i[0], i[1]]
+        waveHandler(sample)
