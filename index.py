@@ -32,7 +32,7 @@ def arrayPEAK(window):
     # got list ranged in [-1, 1]
     return np.max(np.abs(window))
 
-def pcm2float(byte, dtype='float64'):
+def pcm2float(byte, dtype='float32'):
     """
     Convert PCM signal to floating point with a range from -1 to 1.
     Use dtype='float32' for single precision.
@@ -177,6 +177,8 @@ def serial_sender(port, queue):
     device.write(bytes('baud=512000', encoding='utf-8') + b'\xff\xff\xff')
     device.close()
     device = serial.Serial(port, 512000, timeout=1)  
+    device.write(bytes('sendxy=0', encoding='utf-8') + b'\xff\xff\xff')
+    device.write(bytes('bkcmd=0', encoding='utf-8') + b'\xff\xff\xff')
     
     while True:
         # if not queue.empty():
@@ -188,6 +190,7 @@ def serial_sender(port, queue):
                 # print(item, end=' ')
             except Exception as exc:
                 sys.stderr.write(exc)
+            # print(device.read())
 
 if __name__ == '__main__':
 
