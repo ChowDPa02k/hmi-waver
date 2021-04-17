@@ -1,8 +1,8 @@
 import numpy as np
 # import scipy
 import serial
-import time, datetime
-import binascii
+# import time, datetime
+# import binascii
 import multiprocessing
 import pyaudio
 import sys
@@ -68,7 +68,8 @@ def sampler(in_data, volume, queue):
     window[0].append(wave[0]) 
     window[1].append(wave[1])
     # cmds = command_generator_level(volume, window)
-    pool.apply_async(command_generator_level, args=(volume, [wave[0], wave[1]], queue,))
+    if (len(window[0]) % 2) == 0:
+        pool.apply_async(command_generator_level, args=(volume, [np.hstack(window[0][-2:]), np.hstack(window[1][-2:])], queue,))
 
     if len(window[0]) >= 4:
         pool.apply_async(command_generator_spectrum, args=(window, queue,))
@@ -115,13 +116,14 @@ def command_generator_level(volume, window, queue):
             commands.append('vis 6,0')
         peak_record[1] = 0
 
+    print('\rVOL\t', '|' * int(np.mean([rms_l_pct, rms_r_pct]) * 0.4), ' ' * int(40 - 0.4 * np.mean([rms_l_pct, rms_r_pct])), end='')
     queue.put(commands)
     return commands
 
 def command_generator_spectrum(window, queue):
     global freq_seperate, amp_scale
 
-    commands = []
+    commands = ['ref stop']
     left = np.hstack(window[0])
     right = np.hstack(window[1])
     left_spectrum = np.abs(pyfftw.interfaces.numpy_fft.fft(left))
@@ -152,42 +154,40 @@ def command_generator_spectrum(window, queue):
     for i in range(10):
         commands.append('b[%i].val=%i' % (16-i, left_val[i]))
         commands.append('b[%i].val=%i' % (i+17, right_val[i]))
-    # commands.append('ref star')
+    commands.append('ref star')
     queue.put(commands)
     # debug
     # print(commands)
     return 0
 
-def send(port, content):
-    cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
-    cmd = bytes.fromhex(cmd+'ff ff ff')
-    port.write(cmd)
+# def send(port, content):
+#     cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
+#     cmd = bytes.fromhex(cmd+'ff ff ff')
+#     port.write(cmd)
 
 def serial_sender(port, queue):
     device = serial.Serial(port, 115200, timeout=1)
     print('Serial', device.name, 'opened\n')
 
-    def send(device, content):
-        # cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
-        # cmd = bytes.fromhex(cmd+'ff ff ff')
-
-        device.write(bytes(content, encoding='utf-8') + b'\xff\xff\xff')
+    # def send(device, content):
+    #     cmd = binascii.hexlify(content.encode('utf-8')).decode('utf-8')
+    #     cmd = bytes.fromhex(cmd+'ff ff ff')
+    #     device.write(bytes(content, encoding='utf-8') + b'\xff\xff\xff')
     
-    send(device, 'baud=256000')
+    device.write(bytes('baud=512000', encoding='utf-8') + b'\xff\xff\xff')
     device.close()
-    device = serial.Serial(port, 256000, timeout=1)  
-    # send(device, 'page 1')
+    device = serial.Serial(port, 512000, timeout=1)  
+    
     while True:
-        if not queue.empty():
-            commands = queue.get()
-            print(commands)
-            for item in commands:
-                try:
-                    send(device, item)
-                    # print(item, end=' ')
-                except Exception as exc:
-                    sys.stderr.write(exc)
-            # print()
+        # if not queue.empty():
+        commands = queue.get()
+        # print(commands)
+        for item in commands:
+            try:
+                device.write(bytes(item, encoding='utf-8') + b'\xff\xff\xff')
+                # print(item, end=' ')
+            except Exception as exc:
+                sys.stderr.write(exc)
 
 if __name__ == '__main__':
 
